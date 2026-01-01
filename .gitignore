@@ -8,3 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+# generated outputs
+report.csv
+site.dot
+site.png

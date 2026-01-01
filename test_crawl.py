@@ -12,7 +12,7 @@ from crawl import (
 
 class TestCrawl(unittest.TestCase):
     def test_normalize_url_basic(self):
-        self.assertEqual(normalize_url("https://blog.boot.dev/path"), "blog.boot.dev/path")
+        self.assertEqual(normalize_url("https://example.com/path"), "blog.boot.dev/path")
 
     def test_get_h1_from_html_basic(self):
         self.assertEqual(get_h1_from_html("<h1>Hello</h1>"), "Hello")
