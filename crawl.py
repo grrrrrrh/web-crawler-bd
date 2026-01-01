@@ -1,27 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+from typing import Any
 from urllib.parse import urljoin, urlparse
 
-import requests
+import aiohttp
 from bs4 import BeautifulSoup
-
-
-def _ensure_absolute_http_url(url: str) -> str:
-    """
-    Ensure a URL is parseable as an absolute http(s) URL when possible.
-
-    - If already has a scheme, return as-is.
-    - If schemeless like "example.com/path", treat as http://example.com/path
-    """
-    u = url.strip()
-    if "://" in u or u.startswith("//"):
-        return u
-    return "http://" + u
-
-
-def _get_hostname(url: str) -> str | None:
-    parsed = urlparse(_ensure_absolute_http_url(url))
-    return parsed.hostname.lower() if parsed.hostname else None
 
 
 def normalize_url(url: str) -> str:
@@ -62,71 +46,52 @@ def normalize_url(url: str) -> str:
     return normalized
 
 
-def get_h1_from_html(html: str) -> str:
-    soup = BeautifulSoup(html or "", "html.parser")
-    h1 = soup.find("h1")
-    if h1 is None:
-        return ""
-    return h1.get_text(" ", strip=True)
-
-
-def get_first_paragraph_from_html(html: str) -> str:
-    soup = BeautifulSoup(html or "", "html.parser")
-
-    main = soup.find("main")
-    if main is not None:
-        p = main.find("p")
-        if p is not None:
-            return p.get_text(" ", strip=True)
-
-    p = soup.find("p")
-    if p is None:
-        return ""
-    return p.get_text(" ", strip=True)
-
-
 def get_urls_from_html(html: str, base_url: str) -> list[str]:
-    if not isinstance(html, str):
-        raise TypeError("html must be a string")
-    if not isinstance(base_url, str) or not base_url.strip():
-        raise ValueError("base_url must be a non-empty string")
-
     soup = BeautifulSoup(html, "html.parser")
     urls: list[str] = []
-
     for a in soup.find_all("a"):
         href = a.get("href")
         if not href:
             continue
         urls.append(urljoin(base_url, href))
-
     return urls
 
 
 def get_images_from_html(html: str, base_url: str) -> list[str]:
-    if not isinstance(html, str):
-        raise TypeError("html must be a string")
-    if not isinstance(base_url, str) or not base_url.strip():
-        raise ValueError("base_url must be a non-empty string")
-
     soup = BeautifulSoup(html, "html.parser")
     urls: list[str] = []
-
     for img in soup.find_all("img"):
         src = img.get("src")
         if not src:
             continue
         urls.append(urljoin(base_url, src))
-
     return urls
 
 
-def extract_page_data(html: str, page_url: str) -> dict:
-    if not isinstance(html, str):
-        raise TypeError("html must be a string")
-    if not isinstance(page_url, str) or not page_url.strip():
-        raise ValueError("page_url must be a non-empty string")
+def get_h1_from_html(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+    h1 = soup.find("h1")
+    if not h1:
+        return ""
+    return " ".join(h1.stripped_strings)
 
+
+def get_first_paragraph_from_html(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+
+    main = soup.find("main")
+    if main:
+        p = main.find("p")
+        if p:
+            return " ".join(p.stripped_strings)
+
+    p = soup.find("p")
+    if not p:
+        return ""
+    return " ".join(p.stripped_strings)
+
+
+def extract_page_data(html: str, page_url: str) -> dict[str, Any]:
     return {
         "url": page_url,
         "h1": get_h1_from_html(html),
@@ -136,75 +101,166 @@ def extract_page_data(html: str, page_url: str) -> dict:
     }
 
 
-def get_html(url: str) -> str:
-    if not isinstance(url, str):
-        raise TypeError("url must be a string")
-    if not url.strip():
-        raise ValueError("url must be a non-empty string")
+class AsyncCrawler:
+    def __init__(self, base_url: str, max_concurrency: int = 3, max_pages: int = 10):
+        if not isinstance(base_url, str) or not base_url.strip():
+            raise ValueError("base_url must be a non-empty string")
+        if not isinstance(max_concurrency, int) or max_concurrency < 1:
+            raise ValueError("max_concurrency must be an int >= 1")
+        if not isinstance(max_pages, int) or max_pages < 1:
+            raise ValueError("max_pages must be an int >= 1")
 
-    headers = {"User-Agent": "BootCrawler/1.0"}
-    resp = requests.get(url, headers=headers, timeout=10)
-    resp.raise_for_status()
+        parsed = urlparse(base_url)
+        if not parsed.hostname:
+            raise ValueError(f"base_url must be absolute and include a hostname: {base_url!r}")
 
-    content_type = resp.headers.get("Content-Type", "")
-    mime_type = content_type.split(";", 1)[0].strip().lower()
-    if mime_type != "text/html":
-        raise ValueError(f"expected text/html content-type, got {content_type!r}")
+        self.base_url = base_url
+        self.base_domain = parsed.hostname.lower()
 
-    return resp.text
+        self.max_concurrency = max_concurrency
+        self.max_pages = max_pages
+
+        self.should_stop = False
+        self.all_tasks: set[asyncio.Task[None]] = set()
+
+        self.page_data: dict[str, dict[str, Any]] = {}
+        self.lock = asyncio.Lock()
+        self.semaphore = asyncio.Semaphore(max_concurrency)
+
+        self.session: aiohttp.ClientSession | None = None
+
+    async def __aenter__(self) -> "AsyncCrawler":
+        self.session = aiohttp.ClientSession()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        if self.session is not None:
+            await self.session.close()
+
+    def _is_same_domain(self, url: str) -> bool:
+        host = urlparse(url).hostname
+        return bool(host) and host.lower() == self.base_domain
+
+    async def add_page_visit(self, normalized_url: str) -> bool:
+        """
+        Return True if this is the first time we see normalized_url, else False.
+        Also enforces max_pages and coordinates cancelling all running tasks.
+        """
+        async with self.lock:
+            if self.should_stop:
+                return False
+
+            if normalized_url in self.page_data:
+                return False
+
+            if len(self.page_data) >= self.max_pages:
+                self.should_stop = True
+                print("Reached maximum number of pages to crawl.")
+                for task in list(self.all_tasks):
+                    task.cancel()
+                return False
+
+            # Reserve slot immediately to prevent duplicates
+            self.page_data[normalized_url] = {
+                "url": "",
+                "h1": "",
+                "first_paragraph": "",
+                "outgoing_links": [],
+                "image_urls": [],
+            }
+            return True
+
+    async def get_html(self, url: str) -> str:
+        if self.session is None:
+            raise RuntimeError("session not initialized; use AsyncCrawler in an 'async with' block")
+
+        headers = {"User-Agent": "BootCrawler/1.0"}
+        timeout = aiohttp.ClientTimeout(total=10)
+
+        async with self.session.get(url, headers=headers, timeout=timeout) as resp:
+            if resp.status >= 400:
+                raise RuntimeError(f"error fetching {url}: status {resp.status}")
+
+            content_type = resp.headers.get("Content-Type", "")
+            if "text/html" not in content_type.lower():
+                raise RuntimeError(
+                    f"error fetching {url}: expected text/html content-type, got {content_type!r}"
+                )
+
+            return await resp.text()
+
+    async def _run_task(self, url: str) -> None:
+        task = asyncio.current_task()
+        if task is not None:
+            self.all_tasks.add(task)
+        try:
+            await self.crawl_page(url)
+        finally:
+            if task is not None:
+                self.all_tasks.discard(task)
+
+    async def crawl_page(self, url: str) -> None:
+        if self.should_stop:
+            return
+
+        if not self._is_same_domain(url):
+            return
+
+        try:
+            normalized = normalize_url(url)
+        except Exception:
+            return
+
+        is_new = await self.add_page_visit(normalized)
+        if not is_new:
+            return
+
+        # Print once per crawl attempt
+        print(f"crawling: {url}")
+
+        # Keep the real URL in the reserved entry
+        async with self.lock:
+            self.page_data[normalized]["url"] = url
+
+        try:
+            async with self.semaphore:
+                html = await self.get_html(url)
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            return
+
+        data = extract_page_data(html, url)
+        async with self.lock:
+            self.page_data[normalized] = data
+
+        # Spawn child tasks and track them
+        tasks: list[asyncio.Task[None]] = []
+        for link in data.get("outgoing_links", []):
+            if self.should_stop:
+                break
+            if not self._is_same_domain(link):
+                continue
+            t = asyncio.create_task(self._run_task(link))
+            tasks.append(t)
+
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def crawl(self) -> dict[str, dict[str, Any]]:
+        root = asyncio.create_task(self._run_task(self.base_url))
+        await asyncio.gather(root, return_exceptions=True)
+
+        # Ensure cancelled/remaining tasks get a chance to finish their cleanup
+        while True:
+            remaining = [t for t in self.all_tasks if not t.done()]
+            if not remaining:
+                break
+            await asyncio.gather(*remaining, return_exceptions=True)
+
+        return dict(self.page_data)
 
 
-def crawl_page(base_url: str, current_url: str | None = None, page_data: dict | None = None) -> dict:
-    """
-    Recursively crawl pages starting from base_url and return page_data.
-
-    page_data is keyed by normalized URL to avoid crawling the same page twice.
-    Only URLs on the same hostname as base_url are crawled.
-    """
-    if not isinstance(base_url, str) or not base_url.strip():
-        raise ValueError("base_url must be a non-empty string")
-
-    if current_url is None:
-        current_url = base_url
-
-    if page_data is None:
-        page_data = {}
-
-    # Skip non-http(s) schemes (mailto:, javascript:, etc.)
-    parsed_current = urlparse(_ensure_absolute_http_url(current_url))
-    if parsed_current.scheme and parsed_current.scheme not in ("http", "https"):
-        return page_data
-
-    base_host = _get_hostname(base_url)
-    current_host = parsed_current.hostname.lower() if parsed_current.hostname else None
-    if base_host is None or current_host is None:
-        return page_data
-
-    # Same-domain guard
-    if current_host != base_host:
-        return page_data
-
-    # De-dupe by normalized URL
-    try:
-        normalized = normalize_url(current_url)
-    except Exception:
-        return page_data
-
-    if normalized in page_data:
-        return page_data
-
-    print(f"crawling: {current_url}")
-
-    try:
-        html = get_html(current_url)
-    except Exception as e:
-        print(f"error fetching {current_url}: {e}")
-        return page_data
-
-    page_data[normalized] = extract_page_data(html, current_url)
-
-    # Crawl outgoing links
-    for url in get_urls_from_html(html, current_url):
-        crawl_page(base_url, url, page_data)
-
-    return page_data
+async def crawl_site_async(base_url: str, max_concurrency: int, max_pages: int) -> dict[str, dict[str, Any]]:
+    async with AsyncCrawler(base_url, max_concurrency=max_concurrency, max_pages=max_pages) as crawler:
+        return await crawler.crawl()
