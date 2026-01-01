@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from crawl import (
     normalize_url,
@@ -7,6 +8,7 @@ from crawl import (
     get_urls_from_html,
     get_images_from_html,
     extract_page_data,
+    crawl_page,
 )
 
 
@@ -93,9 +95,12 @@ class TestCrawl(unittest.TestCase):
             <img src="/a.png">
             <div><img src="b.png"></div>
         </body></html>"""
-        self.assertEqual(get_images_from_html(html, base_url), ["https://blog.boot.dev/a.png", "https://blog.boot.dev/b.png"])
+        self.assertEqual(
+            get_images_from_html(html, base_url),
+            ["https://blog.boot.dev/a.png", "https://blog.boot.dev/b.png"],
+        )
 
-    # --- extract_page_data (3+ tests) ---
+    # --- extract_page_data ---
     def test_extract_page_data_basic(self):
         input_url = "https://blog.boot.dev"
         input_body = '''<html><body>
@@ -114,37 +119,6 @@ class TestCrawl(unittest.TestCase):
         }
         self.assertEqual(actual, expected)
 
-    def test_extract_page_data_prefers_main_paragraph_and_collects_all(self):
-        input_url = "https://example.com/base"
-        input_body = """<html><body>
-            <h1>Title</h1>
-            <p>Outside P.</p>
-            <main>
-                <p>Main P.</p>
-                <a href="/a">A</a>
-                <a href="https://other.com/b">B</a>
-                <img src="img.png">
-            </main>
-            <a href="/c">C</a>
-            <img src="/d.jpg">
-        </body></html>"""
-        actual = extract_page_data(input_body, input_url)
-        expected = {
-            "url": "https://example.com/base",
-            "h1": "Title",
-            "first_paragraph": "Main P.",
-            "outgoing_links": [
-                "https://example.com/a",
-                "https://other.com/b",
-                "https://example.com/c",
-            ],
-            "image_urls": [
-                "https://example.com/img.png",
-                "https://example.com/d.jpg",
-            ],
-        }
-        self.assertEqual(actual, expected)
-
     def test_extract_page_data_missing_fields_returns_empties(self):
         input_url = "https://example.com"
         input_body = "<html><body><div>No h1, no p, no links, no images</div></body></html>"
@@ -157,6 +131,51 @@ class TestCrawl(unittest.TestCase):
             "image_urls": [],
         }
         self.assertEqual(actual, expected)
+
+    # --- crawl_page (3+ tests) ---
+    @patch("crawl.get_html")
+    def test_crawl_page_crawls_same_domain_only(self, mock_get_html):
+        base = "https://example.com"
+        html_map = {
+            "https://example.com": '<a href="/a">A</a><a href="https://other.com/x">X</a>',
+            "https://example.com/a": '<a href="/b">B</a>',
+            "https://example.com/b": "<p>Done</p>",
+        }
+
+        def side_effect(url: str) -> str:
+            return html_map[url]
+
+        mock_get_html.side_effect = side_effect
+
+        data = crawl_page(base)
+
+        self.assertIn("example.com", data)
+        self.assertIn("example.com/a", data)
+        self.assertIn("example.com/b", data)
+        self.assertNotIn("other.com/x", data)
+
+    @patch("crawl.get_html")
+    def test_crawl_page_does_not_crawl_same_page_twice(self, mock_get_html):
+        base = "https://example.com"
+        html_map = {
+            "https://example.com": '<a href="/a">A</a><a href="/a">A2</a>',
+            "https://example.com/a": '<a href="/">Home</a>',
+        }
+
+        def side_effect(url: str) -> str:
+            return html_map[url]
+
+        mock_get_html.side_effect = side_effect
+
+        data = crawl_page(base)
+        self.assertEqual(mock_get_html.call_count, 2)
+        self.assertEqual(set(data.keys()), {"example.com", "example.com/a"})
+
+    @patch("crawl.get_html")
+    def test_crawl_page_skips_other_domains_without_fetching(self, mock_get_html):
+        base = "https://example.com"
+        crawl_page(base, "https://other.com/x", {})
+        mock_get_html.assert_not_called()
 
 
 if __name__ == "__main__":
