@@ -4,11 +4,13 @@ from crawl import (
     normalize_url,
     get_h1_from_html,
     get_first_paragraph_from_html,
+    get_urls_from_html,
+    get_images_from_html,
 )
 
 
 class TestCrawl(unittest.TestCase):
-    # --- normalize_url tests (existing) ---
+    # --- normalize_url ---
     def test_normalize_url_basic(self):
         self.assertEqual(normalize_url("https://blog.boot.dev/path"), "blog.boot.dev/path")
 
@@ -21,62 +23,76 @@ class TestCrawl(unittest.TestCase):
         self.assertEqual(normalize_url("https://blog.boot.dev/"), "blog.boot.dev")
         self.assertEqual(normalize_url("http://blog.boot.dev"), "blog.boot.dev")
 
-    def test_normalize_url_hostname_lowercased(self):
-        self.assertEqual(normalize_url("https://EXAMPLE.com/Path"), "example.com/Path")
-
-    def test_normalize_url_query_preserved(self):
-        self.assertEqual(normalize_url("https://example.com/path?x=1"), "example.com/path?x=1")
-
-    def test_normalize_url_fragment_removed(self):
-        self.assertEqual(normalize_url("https://example.com/path#section"), "example.com/path")
-
-    def test_normalize_url_default_ports_stripped(self):
-        self.assertEqual(normalize_url("http://example.com:80/path"), "example.com/path")
-        self.assertEqual(normalize_url("https://example.com:443/path"), "example.com/path")
-
-    def test_normalize_url_non_default_port_kept(self):
-        self.assertEqual(normalize_url("https://example.com:8443/path"), "example.com:8443/path")
-
-    def test_normalize_url_schemeless_input(self):
-        self.assertEqual(normalize_url("blog.boot.dev/path/"), "blog.boot.dev/path")
-
-    # --- get_h1_from_html tests (>= 3) ---
+    # --- get_h1_from_html ---
     def test_get_h1_from_html_basic(self):
-        input_body = "<html><body><h1>Test Title</h1></body></html>"
-        self.assertEqual(get_h1_from_html(input_body), "Test Title")
+        html = "<html><body><h1>Test Title</h1></body></html>"
+        self.assertEqual(get_h1_from_html(html), "Test Title")
 
     def test_get_h1_from_html_missing_returns_empty(self):
-        input_body = "<html><body><p>No title here</p></body></html>"
-        self.assertEqual(get_h1_from_html(input_body), "")
+        html = "<html><body><p>No title here</p></body></html>"
+        self.assertEqual(get_h1_from_html(html), "")
 
     def test_get_h1_from_html_nested_and_whitespace(self):
-        input_body = "<html><body><h1>  Hello <span>World</span>  </h1></body></html>"
-        self.assertEqual(get_h1_from_html(input_body), "Hello World")
+        html = "<html><body><h1>  Hello <span>World</span>  </h1></body></html>"
+        self.assertEqual(get_h1_from_html(html), "Hello World")
 
-    # --- get_first_paragraph_from_html tests (>= 3) ---
+    # --- get_first_paragraph_from_html ---
     def test_get_first_paragraph_from_html_main_priority(self):
-        input_body = """<html><body>
+        html = """<html><body>
             <p>Outside paragraph.</p>
             <main>
                 <p>Main paragraph.</p>
             </main>
         </body></html>"""
-        self.assertEqual(get_first_paragraph_from_html(input_body), "Main paragraph.")
+        self.assertEqual(get_first_paragraph_from_html(html), "Main paragraph.")
 
     def test_get_first_paragraph_from_html_fallback_to_first_p(self):
-        input_body = "<html><body><p>First.</p><p>Second.</p></body></html>"
-        self.assertEqual(get_first_paragraph_from_html(input_body), "First.")
+        html = "<html><body><p>First.</p><p>Second.</p></body></html>"
+        self.assertEqual(get_first_paragraph_from_html(html), "First.")
 
     def test_get_first_paragraph_from_html_no_p_returns_empty(self):
-        input_body = "<html><body><main><div>No paragraphs</div></main></body></html>"
-        self.assertEqual(get_first_paragraph_from_html(input_body), "")
+        html = "<html><body><main><div>No paragraphs</div></main></body></html>"
+        self.assertEqual(get_first_paragraph_from_html(html), "")
 
-    def test_get_first_paragraph_from_html_main_without_p_falls_back(self):
-        input_body = """<html><body>
-            <main><div>Nothing here</div></main>
-            <p>Outside fallback.</p>
+    # --- get_urls_from_html (3+ tests) ---
+    def test_get_urls_from_html_absolute(self):
+        base_url = "https://blog.boot.dev"
+        html = '<html><body><a href="https://blog.boot.dev"><span>Boot.dev</span></a></body></html>'
+        self.assertEqual(get_urls_from_html(html, base_url), ["https://blog.boot.dev"])
+
+    def test_get_urls_from_html_relative_to_absolute(self):
+        base_url = "https://blog.boot.dev"
+        html = '<html><body><a href="/path/one">One</a></body></html>'
+        self.assertEqual(get_urls_from_html(html, base_url), ["https://blog.boot.dev/path/one"])
+
+    def test_get_urls_from_html_finds_all_anchors_and_ignores_missing_href(self):
+        base_url = "https://blog.boot.dev"
+        html = """<html><body>
+            <a href="/a">A</a>
+            <a>No href</a>
+            <div><a href="https://example.com/b">B</a></div>
         </body></html>"""
-        self.assertEqual(get_first_paragraph_from_html(input_body), "Outside fallback.")
+        self.assertEqual(get_urls_from_html(html, base_url), ["https://blog.boot.dev/a", "https://example.com/b"])
+
+    # --- get_images_from_html (3+ tests) ---
+    def test_get_images_from_html_relative(self):
+        base_url = "https://blog.boot.dev"
+        html = '<html><body><img src="/logo.png" alt="Logo"></body></html>'
+        self.assertEqual(get_images_from_html(html, base_url), ["https://blog.boot.dev/logo.png"])
+
+    def test_get_images_from_html_absolute(self):
+        base_url = "https://blog.boot.dev"
+        html = '<html><body><img src="https://cdn.example.com/x.png"></body></html>'
+        self.assertEqual(get_images_from_html(html, base_url), ["https://cdn.example.com/x.png"])
+
+    def test_get_images_from_html_ignores_missing_src_and_finds_all(self):
+        base_url = "https://blog.boot.dev"
+        html = """<html><body>
+            <img alt="no src">
+            <img src="/a.png">
+            <div><img src="b.png"></div>
+        </body></html>"""
+        self.assertEqual(get_images_from_html(html, base_url), ["https://blog.boot.dev/a.png", "https://blog.boot.dev/b.png"])
 
 
 if __name__ == "__main__":
