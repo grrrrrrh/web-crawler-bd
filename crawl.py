@@ -66,11 +66,6 @@ def get_first_paragraph_from_html(html: str) -> str:
 
 
 def get_urls_from_html(html: str, base_url: str) -> list[str]:
-    """
-    Return a list of all anchor URLs (<a href="...">) found in the HTML.
-    Relative URLs are converted to absolute URLs using base_url.
-    URLs are returned un-normalized, in document order.
-    """
     if not isinstance(html, str):
         raise TypeError("html must be a string")
     if not isinstance(base_url, str) or not base_url.strip():
@@ -89,11 +84,6 @@ def get_urls_from_html(html: str, base_url: str) -> list[str]:
 
 
 def get_images_from_html(html: str, base_url: str) -> list[str]:
-    """
-    Return a list of all image URLs (<img src="...">) found in the HTML.
-    Relative URLs are converted to absolute URLs using base_url.
-    URLs are returned un-normalized, in document order.
-    """
     if not isinstance(html, str):
         raise TypeError("html must be a string")
     if not isinstance(base_url, str) or not base_url.strip():
@@ -109,3 +99,28 @@ def get_images_from_html(html: str, base_url: str) -> list[str]:
         urls.append(urljoin(base_url, src))
 
     return urls
+
+
+def extract_page_data(html: str, page_url: str) -> dict:
+    """
+    Extract structured information from a page's HTML.
+
+    Returns a dict with keys:
+    - url
+    - h1
+    - first_paragraph
+    - outgoing_links
+    - image_urls
+    """
+    if not isinstance(html, str):
+        raise TypeError("html must be a string")
+    if not isinstance(page_url, str) or not page_url.strip():
+        raise ValueError("page_url must be a non-empty string")
+
+    return {
+        "url": page_url,
+        "h1": get_h1_from_html(html),
+        "first_paragraph": get_first_paragraph_from_html(html),
+        "outgoing_links": get_urls_from_html(html, page_url),
+        "image_urls": get_images_from_html(html, page_url),
+    }
