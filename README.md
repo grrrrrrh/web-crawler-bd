@@ -12,3 +12,15 @@ A small async web crawler that:
 ## Requirements
 - Python (managed via `uv`)
 - `uv` installed
+
+## Setup
+
+git clone <YOUR_REPO_URL>
+cd web-crawler-bd
+uv sync
+
+## usage: uv run main.py URL [max_concurrency max_pages]
+
+uv run main.py https://example.com
+uv run main.py https://example.com 3 10
+
