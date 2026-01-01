@@ -1,8 +1,14 @@
 import unittest
-from crawl import normalize_url
+
+from crawl import (
+    normalize_url,
+    get_h1_from_html,
+    get_first_paragraph_from_html,
+)
 
 
 class TestCrawl(unittest.TestCase):
+    # --- normalize_url tests (existing) ---
     def test_normalize_url_basic(self):
         self.assertEqual(normalize_url("https://blog.boot.dev/path"), "blog.boot.dev/path")
 
@@ -33,6 +39,44 @@ class TestCrawl(unittest.TestCase):
 
     def test_normalize_url_schemeless_input(self):
         self.assertEqual(normalize_url("blog.boot.dev/path/"), "blog.boot.dev/path")
+
+    # --- get_h1_from_html tests (>= 3) ---
+    def test_get_h1_from_html_basic(self):
+        input_body = "<html><body><h1>Test Title</h1></body></html>"
+        self.assertEqual(get_h1_from_html(input_body), "Test Title")
+
+    def test_get_h1_from_html_missing_returns_empty(self):
+        input_body = "<html><body><p>No title here</p></body></html>"
+        self.assertEqual(get_h1_from_html(input_body), "")
+
+    def test_get_h1_from_html_nested_and_whitespace(self):
+        input_body = "<html><body><h1>  Hello <span>World</span>  </h1></body></html>"
+        self.assertEqual(get_h1_from_html(input_body), "Hello World")
+
+    # --- get_first_paragraph_from_html tests (>= 3) ---
+    def test_get_first_paragraph_from_html_main_priority(self):
+        input_body = """<html><body>
+            <p>Outside paragraph.</p>
+            <main>
+                <p>Main paragraph.</p>
+            </main>
+        </body></html>"""
+        self.assertEqual(get_first_paragraph_from_html(input_body), "Main paragraph.")
+
+    def test_get_first_paragraph_from_html_fallback_to_first_p(self):
+        input_body = "<html><body><p>First.</p><p>Second.</p></body></html>"
+        self.assertEqual(get_first_paragraph_from_html(input_body), "First.")
+
+    def test_get_first_paragraph_from_html_no_p_returns_empty(self):
+        input_body = "<html><body><main><div>No paragraphs</div></main></body></html>"
+        self.assertEqual(get_first_paragraph_from_html(input_body), "")
+
+    def test_get_first_paragraph_from_html_main_without_p_falls_back(self):
+        input_body = """<html><body>
+            <main><div>Nothing here</div></main>
+            <p>Outside fallback.</p>
+        </body></html>"""
+        self.assertEqual(get_first_paragraph_from_html(input_body), "Outside fallback.")
 
 
 if __name__ == "__main__":

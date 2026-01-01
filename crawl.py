@@ -1,21 +1,22 @@
 from __future__ import annotations
 
 from urllib.parse import urlparse
+from bs4 import BeautifulSoup
 
 
 def normalize_url(url: str) -> str:
     """
     Normalize a URL so different forms of the "same page" compare equal.
 
-    Normalization rules:
-    - Scheme is removed (http/https)
-    - Hostname is lowercased
-    - Default ports are removed (:80 for http, :443 for https)
-    - Fragment is removed (#...)
-    - Trailing slashes are removed from the path
-    - Query string is preserved (if present)
+    Rules:
+    - Scheme removed (http/https)
+    - Hostname lowercased
+    - Default ports removed (:80 for http, :443 for https)
+    - Fragment removed (#...)
+    - Trailing slashes removed from path
+    - Query preserved (if present)
 
-    This normalized URL is intended for comparisons, not for making requests.
+    Intended for comparisons, not for making requests.
     """
     if not isinstance(url, str):
         raise TypeError("url must be a string")
@@ -45,15 +46,43 @@ def normalize_url(url: str) -> str:
     host_needs_brackets = ":" in hostname and not hostname.startswith("[") and not hostname.endswith("]")
     host = f"[{hostname}]" if host_needs_brackets else hostname
 
-    path = parsed.path or ""
-    # Remove trailing slashes ("/" becomes "")
-    path = path.rstrip("/")
+    path = (parsed.path or "").rstrip("/")
     if path and not path.startswith("/"):
         path = "/" + path
 
     normalized = f"{host}{port_str}{path}"
-
     if parsed.query:
         normalized += f"?{parsed.query}"
-
     return normalized
+
+
+def get_h1_from_html(html: str) -> str:
+    """
+    Return the text content of the first <h1> tag in the given HTML.
+    Returns "" if no <h1> exists.
+    """
+    soup = BeautifulSoup(html or "", "html.parser")
+    h1 = soup.find("h1")
+    if h1 is None:
+        return ""
+    return h1.get_text(" ", strip=True)
+
+
+def get_first_paragraph_from_html(html: str) -> str:
+    """
+    Return the text content of the first <p> tag.
+    If a <main> tag exists, prefer the first <p> within <main>.
+    Returns "" if no <p> exists.
+    """
+    soup = BeautifulSoup(html or "", "html.parser")
+
+    main = soup.find("main")
+    if main is not None:
+        p = main.find("p")
+        if p is not None:
+            return p.get_text(" ", strip=True)
+
+    p = soup.find("p")
+    if p is None:
+        return ""
+    return p.get_text(" ", strip=True)
