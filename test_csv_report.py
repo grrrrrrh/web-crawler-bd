@@ -20,18 +20,31 @@ class TestCSVReport(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             out = os.path.join(d, "report.csv")
-            write_csv_report(page_data, filename=out)
+            write_csv_report(page_data, base_url="https://example.com", filename=out)
 
             with open(out, "r", encoding="utf-8", newline="") as f:
                 rows = list(csv.DictReader(f))
 
             self.assertEqual(
-                rows[0].keys(),
-                {"page_url", "h1", "first_paragraph", "outgoing_link_urls", "image_urls"},
+                set(rows[0].keys()),
+                {
+                    "page_url",
+                    "h1",
+                    "first_paragraph",
+                    "internal_links_count",
+                    "external_links_count",
+                    "external_domains",
+                    "outgoing_link_urls",
+                    "image_urls",
+                },
             )
+
             self.assertEqual(rows[0]["page_url"], "https://example.com")
             self.assertEqual(rows[0]["h1"], "Title")
             self.assertEqual(rows[0]["first_paragraph"], "Hello")
+            self.assertEqual(rows[0]["internal_links_count"], "2")
+            self.assertEqual(rows[0]["external_links_count"], "0")
+            self.assertEqual(rows[0]["external_domains"], "")
             self.assertEqual(rows[0]["outgoing_link_urls"], "https://example.com/a;https://example.com/b")
             self.assertEqual(rows[0]["image_urls"], "https://example.com/x.png")
 
